@@ -7,7 +7,41 @@ import (
 
 	"github.com/go-rod/rod"
 	"github.com/pkg/errors"
+	"github.com/xpzouying/xiaohongshu-mcp/configs"
 )
+
+const (
+	loginStatusTimeout = 30 * time.Second
+	loginStatusDelay   = time.Second
+	loginPageDelay     = 2 * time.Second
+	loginPollInterval  = 500 * time.Millisecond
+	loginSelector      = ".main-container .user .link-wrapper .channel"
+)
+
+// loginPageURL 海外扫码使用独立登录页。
+func loginPageURL() string {
+	if configs.IsIntl() {
+		return configs.WebURL("/login")
+	}
+	return configs.WebURL("/explore")
+}
+
+// isLoggedIn 兼容两站页面状态和旧侧栏标记。
+func isLoggedIn(page *rod.Page) (bool, error) {
+	result, err := page.Eval(`(selector) => {
+		const unwrap = v => v?.value !== undefined ? v.value : (v?._value !== undefined ? v._value : v);
+		const user = window.__INITIAL_STATE__?.user;
+		const info = unwrap(user?.userInfo) || unwrap(user?.currentUser) || unwrap(user?.me);
+		return unwrap(user?.loggedIn) === true ||
+			!!(info && !info.guest && (info.userId || info.user_id || info.nickname)) ||
+			document.querySelector("#global")?.getAttribute("data-logged") === "1" ||
+			!!document.querySelector(selector);
+	}`, loginSelector)
+	if err != nil {
+		return false, errors.Wrap(err, "read login state failed")
+	}
+	return result.Value.Bool(), nil
+}
 
 type LoginAction struct {
 	page *rod.Page
@@ -19,21 +53,11 @@ func NewLogin(page *rod.Page) *LoginAction {
 
 func (a *LoginAction) CheckLoginStatus(ctx context.Context) (bool, error) {
 	// 加超时保护：只是查登录态的快速检查，不应无限挂（登录扫码的等待在 Login/WaitForLogin 里）
-	pp := a.page.Context(ctx).Timeout(30 * time.Second)
-	pp.MustNavigate("https://www.xiaohongshu.com/explore").MustWaitLoad()
+	pp := a.page.Context(ctx).Timeout(loginStatusTimeout)
+	pp.MustNavigate(configs.WebURL("/explore")).MustWaitLoad()
 
-	time.Sleep(1 * time.Second)
-
-	exists, _, err := pp.Has(`.main-container .user .link-wrapper .channel`)
-	if err != nil {
-		return false, errors.Wrap(err, "check login status failed")
-	}
-
-	if !exists {
-		return false, errors.Wrap(err, "login status element not found")
-	}
-
-	return true, nil
+	time.Sleep(loginStatusDelay)
+	return isLoggedIn(pp)
 }
 
 // CurrentUser 当前登录用户的基础信息。
@@ -48,8 +72,9 @@ func (a *LoginAction) CurrentUser(ctx context.Context) (*CurrentUser, error) {
 	pp := a.page.Context(ctx).Timeout(10 * time.Second)
 
 	res, err := pp.Eval(`() => {
-		const u = window.__INITIAL_STATE__ && window.__INITIAL_STATE__.user;
-		const info = u && u.userInfo && u.userInfo.value !== undefined ? u.userInfo.value : (u && u.userInfo);
+		const unwrap = v => v?.value !== undefined ? v.value : (v?._value !== undefined ? v._value : v);
+		const user = window.__INITIAL_STATE__?.user;
+		const info = unwrap(user?.userInfo) || unwrap(user?.currentUser) || unwrap(user?.me);
 		if (!info || info.guest) return "";
 		return JSON.stringify({nickname: info.nickname, userId: info.userId || info.user_id});
 	}`)
@@ -73,29 +98,32 @@ func (a *LoginAction) CurrentUser(ctx context.Context) (*CurrentUser, error) {
 func (a *LoginAction) Login(ctx context.Context) error {
 	pp := a.page.Context(ctx)
 
-	// 导航到小红书首页，这会触发二维码弹窗
-	pp.MustNavigate("https://www.xiaohongshu.com/explore").MustWaitLoad()
+	pp.MustNavigate(loginPageURL()).MustWaitLoad()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(loginPageDelay)
 
-	if exists, _, _ := pp.Has(".main-container .user .link-wrapper .channel"); exists {
-		return nil
+	if loggedIn, err := isLoggedIn(pp); err != nil || loggedIn {
+		return err
 	}
 
-	pp.MustElement(".main-container .user .link-wrapper .channel")
-
-	return nil
+	if a.WaitForLogin(ctx) {
+		return nil
+	}
+	return ctx.Err()
 }
 
 func (a *LoginAction) FetchQrcodeImage(ctx context.Context) (string, bool, error) {
 	pp := a.page.Context(ctx)
 
-	// 导航到小红书首页，这会触发二维码弹窗
-	pp.MustNavigate("https://www.xiaohongshu.com/explore").MustWaitLoad()
+	pp.MustNavigate(loginPageURL()).MustWaitLoad()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(loginPageDelay)
 
-	if exists, _, _ := pp.Has(".main-container .user .link-wrapper .channel"); exists {
+	loggedIn, err := isLoggedIn(pp)
+	if err != nil {
+		return "", false, err
+	}
+	if loggedIn {
 		return "", true, nil
 	}
 
@@ -112,7 +140,7 @@ func (a *LoginAction) FetchQrcodeImage(ctx context.Context) (string, bool, error
 
 func (a *LoginAction) WaitForLogin(ctx context.Context) bool {
 	pp := a.page.Context(ctx)
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(loginPollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -120,8 +148,7 @@ func (a *LoginAction) WaitForLogin(ctx context.Context) bool {
 		case <-ctx.Done():
 			return false
 		case <-ticker.C:
-			el, err := pp.Element(".main-container .user .link-wrapper .channel")
-			if err == nil && el != nil {
+			if loggedIn, err := isLoggedIn(pp); err == nil && loggedIn {
 				return true
 			}
 		}
