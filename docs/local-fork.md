@@ -1,6 +1,6 @@
 # Run our Rednote fork
 
-Use `CSMENG211/xiaohongshu-mcp` as `origin` on branch `fix/rednote-local-fork` and `xpzouying/xiaohongshu-mcp` as `upstream`. The Go module path stays unchanged so internal imports continue to work.
+Use `CSMENG211/xiaohongshu-mcp` as `origin` on branch `main` and `xpzouying/xiaohongshu-mcp` as `upstream`. The Go module path stays unchanged so internal imports continue to work.
 
 This fork includes the overseas-session changes from upstream PR #915 (commit `6f99629a55494f4bb72821235c09aef22123cc04`) and the login behavior recovered from our previous `v2.7.4-rednote` binary:
 
@@ -12,14 +12,12 @@ This fork includes the overseas-session changes from upstream PR #915 (commit `6
 
 The page-state checks need JavaScript because that state is held in the site's JavaScript objects. Navigation, polling, and QR image access use go-rod.
 
-Publish the reviewed patch branch before cloning it on another machine. This repo requires approval before pushing.
-
 ## Build on Linux or macOS
 
 Install Go 1.27.3 or newer. On an Apple Silicon Mac, use `brew install go` in a native ARM64 terminal.
 
 ```bash
-git clone --branch fix/rednote-local-fork git@github.com:CSMENG211/xiaohongshu-mcp.git
+git clone --branch main git@github.com:CSMENG211/xiaohongshu-mcp.git
 cd xiaohongshu-mcp
 git remote add upstream https://github.com/xpzouying/xiaohongshu-mcp.git
 ./scripts/build-local.sh
